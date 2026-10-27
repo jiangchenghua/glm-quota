@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<meta name="robots" content="noindex,nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>GLM 额度</title>
+<style>
+  :root{
+    --bg:#0b0d12; --card:#151922; --line:#232a37; --fg:#e8eef6; --dim:#8b98ab;
+    --ok:#35d07f; --warn:#e3b341; --bad:#ff5c5c; --accent:#4c8dff;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{margin:0;padding:20px 16px calc(20px + env(safe-area-inset-bottom));background:var(--bg);color:var(--fg);
+       font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif}
+  .wrap{max-width:520px;margin:0 auto}
+  header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
+  h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+  .badge{font-size:11px;letter-spacing:.5px;color:var(--dim);border:1px solid var(--line);
+         border-radius:999px;padding:3px 9px;text-transform:uppercase}
+  .sub{color:var(--dim);font-size:12px;margin:6px 0 18px;min-height:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:12px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .label{font-size:13px;color:var(--dim)}
+  .big{font-size:34px;font-weight:720;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1.15}
+  .big small{font-size:14px;font-weight:500;color:var(--dim);margin-left:5px;letter-spacing:0}
+  .pct{font-variant-numeric:tabular-nums;font-weight:650;font-size:15px}
+  .bar{height:9px;border-radius:99px;background:#20262f;overflow:hidden;margin:14px 0 10px}
+  .bar>i{display:block;height:100%;border-radius:99px;transition:width .5s cubic-bezier(.2,.7,.3,1)}
+  .meta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim)}
+  .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+  .f-ok{background:var(--ok)}.f-warn{background:var(--warn)}.f-bad{background:var(--bad)}
+  .actions{display:flex;gap:10px;margin-top:16px}
+  button{font:inherit;font-size:14px;color:var(--fg);background:#1c2230;border:1px solid var(--line);
+         border-radius:12px;padding:11px 16px;cursor:pointer;flex:0 0 auto}
+  button:active{transform:scale(.98)}
+  button.primary{background:var(--accent);border-color:transparent;color:#04121f;font-weight:650}
+  input{font:inherit;width:100%;padding:13px;border-radius:12px;border:1px solid var(--line);
+        background:#0d1119;color:var(--fg);outline:none}
+  input:focus{border-color:var(--accent)}
+  .err{color:var(--bad);font-size:12.5px;margin-top:10px;word-break:break-word}
+  .hint{color:var(--dim);font-size:12.5px;margin-top:12px;line-height:1.6}
+  .hidden{display:none!important}
+  .spin{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);
+        margin-right:6px;animation:p 1.4s ease-in-out infinite}
+  @keyframes p{0%,100%{opacity:.25}50%{opacity:1}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section id="setup" class="hidden">
+    <header><h1>连接 GLM Coding Plan</h1></header>
+    <div class="sub">只需填一次，Key 只保存在这台设备的浏览器里，只发往 api.z.ai。</div>
+    <div class="card">
+      <input id="key" type="password" inputmode="text" autocomplete="off" autocapitalize="off"
+             spellcheck="false" placeholder="粘贴 API Key（形如 xxxx.yyyy）">
+      <div class="actions">
+        <button class="primary" id="save">保存并查询</button>
+        <button id="useCn">国内站</button>
+      </div>
+      <div class="err hidden" id="setupErr"></div>
+      <div class="hint">Key 在 z.ai 控制台 → API Keys 里；这份额度属于 Coding Plan 套餐，不是按量计费余额。</div>
+    </div>
+  </section>
+
+  <section id="app" class="hidden">
+    <header>
+      <h1>GLM Coding Plan</h1>
+      <span class="badge" id="level">—</span>
+    </header>
+    <div class="sub" id="sub"><span class="spin"></span>加载中…</div>
+    <div id="cards"></div>
+    <div class="actions">
+      <button id="refresh">刷新</button>
+      <button id="reset">换 Key</button>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var LS_KEY = 'glm-quota.key', LS_BASE = 'glm-quota.base', LS_T = 'glm-quota.at';
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { data: null, timer: null, tick: null };
+
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function read(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function drop(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+  // 支持通过 #k=<key> 一次性带入（导入后立刻从地址栏抹掉）
+  (function importHash() {
+    var h = location.hash || '';
+    var m = /[#&]k(?:ey)?=([^&]+)/.exec(h);
+    if (!m) return;
+    try {
+      var v = decodeURIComponent(m[1]).trim();
+      if (v) { store(LS_KEY, v); store(LS_BASE, 'https://api.z.ai'); }
+    } catch (e) {}
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+  })();
+
+  function base() { return read(LS_BASE) || 'https://api.z.ai'; }
+  function apiKey() { return read(LS_KEY) || ''; }
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function clock(ts) {
+    var d = new Date(ts), n = new Date();
+    var hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    return d.toDateString() === n.toDateString() ? hm : (pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + hm);
+  }
+  function countdown(ts) {
+    if (!ts) return '';
+    var ms = ts - Date.now();
+    if (ms <= 0) return '马上刷新';
+    var m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+    if (d > 0) return d + ' 天 ' + (h % 24) + ' 小时后';
+    if (h > 0) return h + ' 小时 ' + (m % 60) + ' 分后';
+    return m + ' 分后';
+  }
+  function label(l) {
+    if (l.type === 'TIME_LIMIT') return l.unit === 5 ? 'MCP 月度调用' : '工具调用';
+    if (l.unit === 3 && l.number === 5) return '5 小时窗口';
+    if (l.unit === 6) return '每周额度';
+    if (l.unit === 5) return '月度额度';
+    return '额度';
+  }
+  function tone(p) { return p <= 10 ? 'bad' : p <= 20 ? 'warn' : 'ok'; }
+  function nf(n) { return n == null ? '—' : Number(n).toLocaleString('zh-CN'); }
+
+  function render() {
+    var q = state.data; if (!q) return;
+    var d = q.data || {}, limits = (d.limits || []).slice();
+    var order = function (x) { return x.type === 'TIME_LIMIT' ? 9 : x.unit === 3 ? 0 : x.unit === 6 ? 1 : 5; };
+    limits.sort(function (a, b) { return order(a) - order(b); });
+    $('level').textContent = d.level || '';
+
+    $('cards').innerHTML = limits.map(function (l) {
+      var total = Number(l.usage || 0) || null;
+      var used = Number(l.currentValue || 0);
+      var left = isFinite(Number(l.remaining)) ? Number(l.remaining) : (total ? total - used : null);
+      var pu = isFinite(Number(l.percentage)) ? Number(l.percentage) : (total ? used / total * 100 : 0);
+      var pl = Math.max(0, 100 - pu);
+      var t = tone(pl);
+      var unit = l.type === 'TIME_LIMIT' ? ' 次' : ' 积分';
+      var reset = l.nextResetTime
+        ? '<span data-ts="' + l.nextResetTime + '">' + clock(l.nextResetTime) + ' 刷新（' + countdown(l.nextResetTime) + '）</span>'
+        : '<span></span>';
+      return '<div class="card">' +
+        '<div class="row"><span class="label">' + label(l) + '</span>' +
+        '<span class="pct ' + t + '">剩 ' + (Math.round(pl * 10) / 10) + '%</span></div>' +
+        '<div class="row" style="margin-top:8px"><span class="big">' + nf(left) + '<small>' + unit + '</small></span>' +
+        '<span class="label">共 ' + nf(total) + '</span></div>' +
+        '<div class="bar"><i class="f-' + t + '" style="width:' + Math.min(100, Math.max(0, pl)) + '%"></i></div>' +
+        '<div class="meta"><span>已用 ' + nf(used) + unit + '</span>' + reset + '</div>' +
+        '</div>';
+    }).join('') || '<div class="card label">接口没有返回额度条目。</div>';
+  }
+
+  function tickText() {
+    var nodes = document.querySelectorAll('[data-ts]');
+    for (var i = 0; i < nodes.length; i++) {
+      var ts = Number(nodes[i].getAttribute('data-ts'));
+      nodes[i].textContent = clock(ts) + ' 刷新（' + countdown(ts) + '）';
+    }
+  }
+
+  function load() {
+    var k = apiKey();
+    if (!k) { $('setup').classList.remove('hidden'); $('app').classList.add('hidden'); return; }
+    $('setup').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    $('sub').innerHTML = '<span class="spin"></span>查询中…';
+
+    var ctrl = new AbortController();
+    var to = setTimeout(function () { ctrl.abort(); }, 15000);
+
+    fetch(base() + '/api/monitor/usage/quota/limit', {
+      headers: { Authorization: 'Bearer ' + k, Accept: 'application/json' },
+      signal: ctrl.signal,
+      cache: 'no-store'
+    }).then(function (res) {
+      return res.text().then(function (txt) {
+        if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + txt.slice(0, 100));
+        var q = JSON.parse(txt);
+        if (q.code && q.code !== 200) throw new Error('接口返回 ' + q.code + '：' + (q.msg || ''));
+        state.data = q;
+        render();
+        $('sub').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + ' · 每 60 秒自动刷新';
+      });
+    }).catch(function (e) {
+      $('sub').textContent = '查询失败：' + (e && e.message ? e.message : e) + '（下拉可重试）';
+    }).then(function () { clearTimeout(to); });
+  }
+
+  function start() {
+    clearInterval(state.timer); clearInterval(state.tick);
+    state.timer = setInterval(load, 60000);
+    state.tick = setInterval(tickText, 1000);
+  }
+
+  $('save').onclick = function () {
+    var v = $('key').value.trim();
+    if (!v) return;
+    store(LS_KEY, v); store(LS_BASE, 'https://api.z.ai');
+    load(); start();
+  };
+  $('useCn').onclick = function () {
+    var v = $('key').value.trim();
+    store(LS_BASE, 'https://open.bigmodel.cn');
+    if (v) { store(LS_KEY, v); load(); start(); } else { load(); }
+  };
+  $('refresh').onclick = function () { load(); };
+  $('reset').onclick = function () {
+    drop(LS_KEY); drop(LS_BASE); $('key').value = ''; load();
+  };
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
+
+  load(); start();
+})();
+</script>
+</body>
+</html>
